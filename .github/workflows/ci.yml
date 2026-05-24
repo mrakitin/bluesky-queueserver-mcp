@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:latest
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package with test extras
+        run: pip install -e ".[test]"
+
+      # --- Unit tests (no RE Manager needed) --------------------------------
+      - name: Run unit tests
+        run: pytest tests/ -v -k "not (list_tools_via_stdio or ping_via_stdio or status_via_stdio)"
+
+      # --- Start RE Manager for integration tests ---------------------------
+      - name: Start RE Manager
+        run: |
+          start-re-manager --zmq-publish-console OFF &
+          echo "Waiting for RE Manager to be ready..."
+          for i in $(seq 1 30); do
+            python -c "
+          from bluesky_queueserver_api.zmq import REManagerAPI
+          api = REManagerAPI(timeout_recv=1.0, timeout_send=1.0)
+          r = api.ping()
+          assert r.get('msg'), 'not ready'
+          " 2>/dev/null && echo "RE Manager ready after ${i}s" && break || sleep 1
+          done
+
+      - name: Run integration tests
+        run: pytest tests/ -v -k "list_tools_via_stdio or ping_via_stdio or status_via_stdio"
