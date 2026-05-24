@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=64", "setuptools-scm"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "bluesky-queueserver-mcp"
+version = "0.1.0"
+description = "MCP server for Bluesky Queue Server (bluesky-queueserver)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "BSD-3-Clause" }
+dependencies = [
+    "fastmcp",
+    "bluesky-queueserver-api",
+    "openai",
+]
+
+[project.scripts]
+bluesky-mcp-server = "bluesky_queueserver_mcp.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bluesky_queueserver_mcp*"]
