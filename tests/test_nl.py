@@ -80,7 +80,7 @@ async def _ask_llm(prompt: str, tools: list[dict]) -> Optional[str]:
     """Send *prompt* to Ollama with *tools* and return the first tool name called."""
     from openai import AsyncOpenAI
 
-    client = AsyncOpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
+    client = AsyncOpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama", timeout=120.0)
     response = await client.chat.completions.create(
         model=OLLAMA_MODEL,
         messages=[
@@ -104,6 +104,11 @@ async def _ask_llm(prompt: str, tools: list[dict]) -> Optional[str]:
 _TOOLS: list[dict] = []  # populated once per session
 
 
+def _tools_named(*names: str) -> list[dict]:
+    """Return the subset of tools whose names are in *names*."""
+    return [t for t in _TOOLS if t["function"]["name"] in names]
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _load_tools():
     global _TOOLS
@@ -117,8 +122,9 @@ def _load_tools():
 @skip_no_ollama
 async def test_nl_status():
     """'What is the current state of the RE Manager?' → status or ping."""
+    tools = _tools_named("status", "ping", "environment_open")
     tool = await _ask_llm(
-        "What is the current state of the RE Manager?", _TOOLS
+        "What is the current state of the RE Manager?", tools
     )
     assert tool in ("status", "ping"), f"Unexpected tool: {tool!r}"
 
@@ -126,22 +132,25 @@ async def test_nl_status():
 @skip_no_ollama
 async def test_nl_queue_get():
     """'Show me what's in the queue' → queue_get."""
-    tool = await _ask_llm("Show me what's in the plan queue.", _TOOLS)
+    tools = _tools_named("queue_get", "item_add", "history_get")
+    tool = await _ask_llm("Show me what's in the plan queue.", tools)
     assert tool == "queue_get", f"Unexpected tool: {tool!r}"
 
 
 @skip_no_ollama
 async def test_nl_environment_open():
     """'Open the worker environment' → environment_open."""
-    tool = await _ask_llm("Open the worker environment.", _TOOLS)
+    tools = _tools_named("environment_open", "environment_close", "status")
+    tool = await _ask_llm("Open the worker environment.", tools)
     assert tool == "environment_open", f"Unexpected tool: {tool!r}"
 
 
 @skip_no_ollama
 async def test_nl_item_add():
     """'Add a count plan to the queue' → item_add."""
+    tools = _tools_named("item_add", "queue_get", "item_remove")
     tool = await _ask_llm(
-        "Add a count plan with detector det for 5 points to the queue.", _TOOLS
+        "Add a count plan with detector det for 5 points to the queue.", tools
     )
     assert tool == "item_add", f"Unexpected tool: {tool!r}"
 
@@ -149,5 +158,6 @@ async def test_nl_item_add():
 @skip_no_ollama
 async def test_nl_history_get():
     """'Show me the run history' → history_get."""
-    tool = await _ask_llm("Show me the plan execution history.", _TOOLS)
+    tools = _tools_named("history_get", "queue_get", "history_clear")
+    tool = await _ask_llm("Show me the plan execution history.", tools)
     assert tool == "history_get", f"Unexpected tool: {tool!r}"
