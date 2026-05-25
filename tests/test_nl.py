@@ -112,11 +112,7 @@ def _tools_named(*names: str) -> list[dict]:
 @pytest.fixture(scope="session", autouse=True)
 def _load_tools():
     global _TOOLS
-    loop = asyncio.new_event_loop()
-    try:
-        _TOOLS = loop.run_until_complete(_get_mcp_tools_as_openai_schema())
-    finally:
-        loop.close()
+    _TOOLS = asyncio.run(_get_mcp_tools_as_openai_schema())
 
 
 @skip_no_ollama
@@ -139,18 +135,21 @@ async def test_nl_queue_get():
 
 @skip_no_ollama
 async def test_nl_environment_open():
-    """'Open the worker environment' → environment_open."""
+    """'Initialize the worker environment' → environment_open."""
     tools = _tools_named("environment_open", "environment_close", "status")
-    tool = await _ask_llm("Open the worker environment.", tools)
+    tool = await _ask_llm(
+        "Initialize and start up the RunEngine worker environment so that plans can run.",
+        tools,
+    )
     assert tool == "environment_open", f"Unexpected tool: {tool!r}"
 
 
 @skip_no_ollama
 async def test_nl_item_add():
-    """'Add a count plan to the queue' → item_add."""
+    """'Submit a plan to the queue' → item_add."""
     tools = _tools_named("item_add", "queue_get", "item_remove")
     tool = await _ask_llm(
-        "Add a count plan with detector det for 5 points to the queue.", tools
+        "Submit the plan count(['det'], num=5) to the plan queue.", tools
     )
     assert tool == "item_add", f"Unexpected tool: {tool!r}"
 
