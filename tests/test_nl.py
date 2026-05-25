@@ -1,0 +1,141 @@
+"""Natural-language tool-selection tests for bluesky-queueserver-mcp.
+
+Each test sends a natural-language prompt to an Ollama-hosted LLM with the
+MCP server tools available (via the OpenAI tool-use API) and asserts that the
+LLM chose the correct tool.  The LLM's prose reply is not evaluated.
+
+Requirements
+------------
+- Ollama running with ``llama3.2:1b`` (or the model set via ``OLLAMA_MODEL``)
+- ``bluesky-mcp-server`` on PATH
+- Tests are automatically skipped when Ollama is unreachable
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+from typing import Optional
+
+import pytest
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:1b")
+
+
+def _ollama_available() -> bool:
+    try:
+        import httpx
+
+        r = httpx.get(OLLAMA_BASE_URL.replace("/v1", ""), timeout=3.0)
+        return r.status_code < 500
+    except Exception:
+        return False
+
+
+skip_no_ollama = pytest.mark.skipif(
+    not _ollama_available(),
+    reason=f"Ollama not running at {OLLAMA_BASE_URL}",
+)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+async def _get_mcp_tools_as_openai_schema() -> list[dict]:
+    """Start the MCP server and return its tools in OpenAI function-call format."""
+    from fastmcp import Client
+    from fastmcp.client.transports import StdioTransport
+
+    transport = StdioTransport(command="bluesky-mcp-server", args=[])
+    async with Client(transport) as client:
+        tools = await client.list_tools()
+
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": t.name,
+                "description": t.description or "",
+                "parameters": t.inputSchema or {"type": "object", "properties": {}},
+            },
+        }
+        for t in tools
+    ]
+
+
+async def _ask_llm(prompt: str, tools: list[dict]) -> Optional[str]:
+    """Send *prompt* to Ollama with *tools* and return the first tool name called."""
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
+    response = await client.chat.completions.create(
+        model=OLLAMA_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        tools=tools,
+        tool_choice="auto",
+    )
+    choice = response.choices[0]
+    tool_calls = getattr(choice.message, "tool_calls", None)
+    if tool_calls:
+        return tool_calls[0].function.name
+    return None
+
+
+# ---------------------------------------------------------------------------
+# NL tests
+# ---------------------------------------------------------------------------
+
+_TOOLS: list[dict] = []  # populated once per session
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _load_tools():
+    global _TOOLS
+    _TOOLS = asyncio.get_event_loop().run_until_complete(
+        _get_mcp_tools_as_openai_schema()
+    )
+
+
+@skip_no_ollama
+async def test_nl_status():
+    """'What is the current state of the RE Manager?' → status or ping."""
+    tool = await _ask_llm(
+        "What is the current state of the RE Manager?", _TOOLS
+    )
+    assert tool in ("status", "ping"), f"Unexpected tool: {tool!r}"
+
+
+@skip_no_ollama
+async def test_nl_queue_get():
+    """'Show me what's in the queue' → queue_get."""
+    tool = await _ask_llm("Show me what's in the plan queue.", _TOOLS)
+    assert tool == "queue_get", f"Unexpected tool: {tool!r}"
+
+
+@skip_no_ollama
+async def test_nl_environment_open():
+    """'Open the worker environment' → environment_open."""
+    tool = await _ask_llm("Open the worker environment.", _TOOLS)
+    assert tool == "environment_open", f"Unexpected tool: {tool!r}"
+
+
+@skip_no_ollama
+async def test_nl_item_add():
+    """'Add a count plan to the queue' → item_add."""
+    tool = await _ask_llm(
+        "Add a count plan with detector det for 5 points to the queue.", _TOOLS
+    )
+    assert tool == "item_add", f"Unexpected tool: {tool!r}"
+
+
+@skip_no_ollama
+async def test_nl_history_get():
+    """'Show me the run history' → history_get."""
+    tool = await _ask_llm("Show me the plan execution history.", _TOOLS)
+    assert tool == "history_get", f"Unexpected tool: {tool!r}"
